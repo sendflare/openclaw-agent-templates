@@ -3,13 +3,13 @@
  * 
  * 通过 Sendflare SDK 发送电子邮件和管理联系人
  */
-import { SendflareClient } from './Sendflare-client';
+import { SendflareClient } from './sendflare-client';
 import type { SendflareConfig, SkillContext, SkillResult, SendEmailRequest } from './types';
 
 export class SendflareSkill {
-  public name: string = 'Sendflare-email';
+  public name: string = 'sendflare-email';
   public description: string = '通过 Sendflare 发送电子邮件和管理联系人';
-  public version: string = '1.0.0';
+  public version: string = '1.0.2';
 
   private client: SendflareClient | null = null;
   private config: SendflareConfig | null = null;
@@ -20,6 +20,8 @@ export class SendflareSkill {
   async initialize(config: SendflareConfig): Promise<void> {
     this.config = {
       apiToken: config.apiToken,
+      appId: config.appId,
+      fromEmail: config.fromEmail || 'noreply@yourdomain.com',
     };
     this.client = new SendflareClient(this.config);
   }
@@ -29,7 +31,6 @@ export class SendflareSkill {
    */
   async execute(context: SkillContext): Promise<SkillResult> {
     try {
-      // 如果还没初始化，先初始化
       if (!this.client && context.config) {
         await this.initialize(context.config);
       }
@@ -45,7 +46,6 @@ export class SendflareSkill {
       const { userMessage } = context;
       const message = userMessage.content;
 
-      // 解析用户意图
       if (this.matchSendEmailIntent(message)) {
         return await this.handleSendEmail(message);
       } else if (this.matchGetContactsIntent(message)) {
@@ -66,9 +66,6 @@ export class SendflareSkill {
     }
   }
 
-  /**
-   * 匹配发送邮件意图
-   */
   private matchSendEmailIntent(message: string): boolean {
     const lowerMsg = message.toLowerCase();
     return (
@@ -79,9 +76,6 @@ export class SendflareSkill {
     );
   }
 
-  /**
-   * 匹配获取联系人意图
-   */
   private matchGetContactsIntent(message: string): boolean {
     const lowerMsg = message.toLowerCase();
     return (
@@ -93,9 +87,6 @@ export class SendflareSkill {
     );
   }
 
-  /**
-   * 匹配保存联系人意图
-   */
   private matchSaveContactIntent(message: string): boolean {
     const lowerMsg = message.toLowerCase();
     return (
@@ -106,9 +97,6 @@ export class SendflareSkill {
     );
   }
 
-  /**
-   * 匹配删除联系人意图
-   */
   private matchDeleteContactIntent(message: string): boolean {
     const lowerMsg = message.toLowerCase();
     return (
@@ -118,20 +106,14 @@ export class SendflareSkill {
     );
   }
 
-  /**
-   * 处理发送邮件
-   */
   private async handleSendEmail(message: string): Promise<SkillResult> {
     if (!this.client) {
       throw new Error('客户端未初始化');
     }
 
-    // 尝试提取邮件信息
-    // 格式：发送邮件给 xxx@example.com，主题：xxx，内容：xxx
     let emailMatch = message.match(/发送邮件给 ([^\s,]+)，主题：([^,，]+)，内容：(.+)/);
     
     if (!emailMatch) {
-      // 尝试简化格式：发邮件到 xxx@example.com 主题 xxx 内容 xxx
       const simpleMatch = message.match(/发邮件 (?:到 | 给) ([^\s,]+)\s*(?:主题 | 标题)[:：]?\s*([^\s,]+)\s*(?:内容 | 正文)[:：]?\s*(.+)/);
       
       if (!simpleMatch) {
@@ -153,29 +135,24 @@ export class SendflareSkill {
     return this.performSendEmail(to.trim(), subject.trim(), body.trim());
   }
 
-  /**
-   * 执行邮件发送
-   */
   private async performSendEmail(to: string, subject: string, body: string): Promise<SkillResult> {
-    if (!this.client) {
+    if (!this.client || !this.config) {
       throw new Error('客户端未初始化');
     }
 
-    // 构建发送请求
     const emailReq: SendEmailRequest = {
-      from: 'noreply@yourdomain.com', // TODO: 从配置读取
+      from: this.config.fromEmail || 'noreply@yourdomain.com',
       to: to,
       subject: subject,
       body: body,
     };
 
-    // 执行发送
     const result = await this.client.sendEmail(emailReq);
 
     if (result.success) {
       return {
         success: true,
-        message: `✅ 邮件发送成功！\n收件人：${to}\n主题：${subject}\n邮件 ID: ${(result as any).messageId || 'N/A'}`,
+        message: `✅ 邮件发送成功！\n收件人：${to}\n主题：${subject}\n发件人：${emailReq.from}`,
         data: result,
       };
     } else {
@@ -187,61 +164,164 @@ export class SendflareSkill {
     }
   }
 
-  /**
-   * 处理获取联系人
-   */
   private async handleGetContacts(message: string): Promise<SkillResult> {
-    if (!this.client) {
+    if (!this.client || !this.config) {
       throw new Error('客户端未初始化');
     }
 
-    // TODO: 需要从配置读取 appId
-    return {
-      success: false,
-      message: '请先配置 App ID 才能获取联系人列表',
-      suggestActions: ['配置 App ID'],
-    };
+    if (!this.config.appId) {
+      return {
+        success: false,
+        message: '请先配置 App ID 才能获取联系人列表',
+        suggestActions: ['配置 App ID'],
+      };
+    }
+
+    // 解析分页参数
+    let page = 1;
+    let pageSize = 20;
+
+    const pageMatch = message.match(/第 (\d+) 页/);
+    if (pageMatch) {
+      page = parseInt(pageMatch[1], 10);
+      if (page < 1) page = 1;
+    }
+
+    const pageSizeMatch = message.match(/每页 (\d+) 条/);
+    if (pageSizeMatch) {
+      pageSize = parseInt(pageSizeMatch[1], 10);
+      if (pageSize < 1) pageSize = 1;
+      if (pageSize > 100) pageSize = 100;
+    }
+
+    try {
+      const result = await this.client.getContactList({
+        appId: this.config.appId,
+        page: page,
+        pageSize: pageSize,
+      });
+
+      if (result.contacts && result.contacts.length > 0) {
+        const totalPages = Math.ceil(result.total / result.pageSize);
+        let contactList = `📋 联系人列表（共 ${result.total} 个，第 ${result.page}/${totalPages} 页）:\n\n`;
+        result.contacts.forEach((contact, index) => {
+          const name = contact.data?.firstName && contact.data?.lastName 
+            ? `${contact.data.firstName} ${contact.data.lastName}` 
+            : '未命名';
+          contactList += `${index + 1}. ${name}\n   邮箱：${contact.emailAddress}\n`;
+          if (contact.data?.company) contactList += `   公司：${contact.data.company}\n`;
+          if (contact.data?.phone) contactList += `   电话：${contact.data.phone}\n`;
+          contactList += '\n';
+        });
+
+        if (totalPages > 1) {
+          contactList += `\n💡 提示：使用 "获取联系人列表 第 X 页" 或 "获取联系人列表 每页 X 条" 翻页`;
+        }
+
+        return {
+          success: true,
+          message: contactList,
+          data: result,
+        };
+      } else {
+        return {
+          success: true,
+          message: '联系人列表为空',
+          data: result,
+        };
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `获取联系人失败：${error.message}`,
+        error: error.message,
+      };
+    }
   }
 
-  /**
-   * 处理保存联系人
-   */
   private async handleSaveContact(message: string): Promise<SkillResult> {
-    if (!this.client) {
+    if (!this.client || !this.config) {
       throw new Error('客户端未初始化');
     }
 
-    // 提取联系人信息
-    // 格式：保存联系人 xxx@example.com，姓名：xxx
+    if (!this.config.appId) {
+      return {
+        success: false,
+        message: '请先配置 App ID 才能保存联系人',
+        suggestActions: ['配置 App ID'],
+      };
+    }
+
     const contactMatch = message.match(/保存联系人 ([^\s,]+)，姓名：(.+)/);
     
     if (!contactMatch) {
+      const simpleMatch = message.match(/保存联系人 ([^\s,]+)/);
+      if (simpleMatch) {
+        const [, email] = simpleMatch;
+        return this.performSaveContact(email, null);
+      }
+      
       return {
         success: false,
-        message: '请指定联系人邮箱和姓名，例如：保存联系人 john@example.com，姓名：John Doe',
+        message: '请指定联系人邮箱，例如：保存联系人 john@example.com，姓名：John Doe',
         suggestActions: ['保存联系人 john@example.com，姓名：John Doe'],
       };
     }
 
     const [, email, name] = contactMatch;
-
-    // TODO: 需要从配置读取 appId
-    return {
-      success: false,
-      message: '请先配置 App ID 才能保存联系人',
-      suggestActions: ['配置 App ID'],
-    };
+    return this.performSaveContact(email, name);
   }
 
-  /**
-   * 处理删除联系人
-   */
-  private async handleDeleteContact(message: string): Promise<SkillResult> {
-    if (!this.client) {
+  private async performSaveContact(email: string, name: string | null): Promise<SkillResult> {
+    if (!this.client || !this.config || !this.config.appId) {
       throw new Error('客户端未初始化');
     }
 
-    // 提取联系人邮箱
+    let firstName = '';
+    let lastName = '';
+
+    if (name) {
+      const nameParts = name.split(' ');
+      firstName = nameParts[0] || '';
+      lastName = nameParts.slice(1).join(' ') || '';
+    }
+
+    try {
+      const result = await this.client.saveContact({
+        appId: this.config.appId,
+        emailAddress: email,
+        data: {
+          firstName,
+          lastName,
+        },
+      });
+
+      return {
+        success: result.success,
+        message: result.message,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `保存联系人失败：${error.message}`,
+        error: error.message,
+      };
+    }
+  }
+
+  private async handleDeleteContact(message: string): Promise<SkillResult> {
+    if (!this.client || !this.config) {
+      throw new Error('客户端未初始化');
+    }
+
+    if (!this.config.appId) {
+      return {
+        success: false,
+        message: '请先配置 App ID 才能删除联系人',
+        suggestActions: ['配置 App ID'],
+      };
+    }
+
     const emailMatch = message.match(/删除联系人 ([^\s,]+)/);
     
     if (!emailMatch) {
@@ -254,17 +334,25 @@ export class SendflareSkill {
 
     const [, email] = emailMatch;
 
-    // TODO: 需要从配置读取 appId
-    return {
-      success: false,
-      message: '请先配置 App ID 才能删除联系人',
-      suggestActions: ['配置 App ID'],
-    };
+    try {
+      const result = await this.client.deleteContact({
+        appId: this.config.appId,
+        emailAddress: email,
+      });
+
+      return {
+        success: result.success,
+        message: result.message,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `删除联系人失败：${error.message}`,
+        error: error.message,
+      };
+    }
   }
 
-  /**
-   * 获取帮助信息
-   */
   private getHelpMessage(): SkillResult {
     return {
       success: true,
@@ -272,23 +360,32 @@ export class SendflareSkill {
 
 可用命令：
 1. 发送邮件：发送邮件给 xxx@example.com，主题：xxx，内容：xxx
-2. 获取联系人：获取联系人列表
+2. 获取联系人：
+   - 获取联系人列表
+   - 获取联系人列表 第 X 页
+   - 获取联系人列表 每页 X 条
+   - 获取联系人列表 第 X 页 每页 X 条
 3. 保存联系人：保存联系人 xxx@example.com，姓名：xxx
 4. 删除联系人：删除联系人 xxx@example.com
 
 示例：
 - 发送邮件给 test@example.com，主题：会议通知，内容：明天下午 3 点开会
 - 获取联系人列表
+- 获取联系人列表 第 2 页
+- 获取联系人列表 每页 50 条
+- 获取联系人列表 第 2 页 每页 50 条
 - 保存联系人 john@example.com，姓名：John Doe
-- 删除联系人 john@example.com`,
+- 删除联系人 john@example.com
+
+注意：需要在配置中设置 App ID 才能使用联系人功能`,
       suggestActions: [
         '发送邮件给 test@example.com，主题：测试，内容：这是一封测试邮件',
         '获取联系人列表',
+        '获取联系人列表 第 2 页',
         '保存联系人 john@example.com，姓名：John Doe',
       ],
     };
   }
 }
 
-// 导出单例
 export default new SendflareSkill();
