@@ -97,7 +97,12 @@ sendflare-agent-template/
 │           └── sendflare-skill/
 └── scripts/
     └── install.sh
-```
+```  
+
+## 链接  
+[Sendflare](https://sendflare.com)  
+[sendflare-skill](https://clawhub.ai/keepchen/sendflare-skill)  
+[Docs](https://docs.sendflare.com/docs/)  
 
 ## 📄 License
 
